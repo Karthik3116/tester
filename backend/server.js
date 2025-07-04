@@ -1,4 +1,3 @@
-// // backend/server.js
 
 // // Import necessary modules
 // const express = require('express');
@@ -64,6 +63,7 @@
 //   questions: { type: [QuestionSchema], required: true },
 //   status: { type: String, required: true, enum: ['created', 'active', 'completed'], default: 'created' },
 //   startTime: { type: Date, default: null },
+//   duration: { type: Number, required: true }, // New: Duration of the test in minutes
 //   participants: [{ // Stores { userId, userName, joinedAt }
 //     userId: { type: String, required: true }, // This will be the _id of the user
 //     userName: { type: String, required: true }, // User's username
@@ -234,12 +234,15 @@
 //  * Requires admin role.
 //  */
 // app.post('/api/tests/create', authenticateToken, authorizeRole(['admin']), async (req, res) => {
-//   const { topic, numQuestions } = req.body;
+//   const { topic, numQuestions, duration } = req.body; // New: Get duration from request body
 //   const adminId = req.user.userId; // Get adminId from authenticated user
 //   const adminUsername = req.user.username; // Get adminUsername from authenticated user
 
-//   if (!topic || !numQuestions) {
-//     return res.status(400).json({ message: 'Missing required fields: topic, numQuestions' });
+//   if (!topic || !numQuestions || !duration) { // New: Validate duration
+//     return res.status(400).json({ message: 'Missing required fields: topic, numQuestions, duration' });
+//   }
+//   if (duration <= 0) {
+//     return res.status(400).json({ message: 'Duration must be a positive number.' });
 //   }
 
 //   try {
@@ -295,6 +298,7 @@
 //       questions,
 //       status: 'created',
 //       startTime: null,
+//       duration, // New: Save the duration
 //       participants: [],
 //       createdAt: new Date()
 //     });
@@ -393,9 +397,9 @@
 //     test.startTime = new Date();
 //     await test.save();
 
-//     // Emit 'testStarted' event to all clients in this test's room
-//     io.to(testId).emit('testStarted', { startTime: test.startTime.toISOString() });
-//     console.log(`Test ${testId} started by admin ${adminId} at ${test.startTime}`);
+//     // Emit 'testStarted' event to all clients in this test's room, including duration
+//     io.to(testId).emit('testStarted', { startTime: test.startTime.toISOString(), duration: test.duration });
+//     console.log(`Test ${testId} started by admin ${adminId} at ${test.startTime} with duration ${test.duration} minutes`);
 
 //     res.status(200).json({ message: 'Test started successfully', startTime: test.startTime.toISOString() });
 
@@ -553,11 +557,12 @@
 //     try {
 //       const test = await Test.findOne({ testId });
 //       if (test) {
-//         // Emit current test state to the newly joined client
+//         // Emit current test state to the newly joined client, including duration
 //         socket.emit('testUpdate', {
 //           participants: test.participants,
 //           status: test.status,
-//           startTime: test.startTime ? test.startTime.toISOString() : null
+//           startTime: test.startTime ? test.startTime.toISOString() : null,
+//           duration: test.duration // Include duration in testUpdate
 //         });
 //       }
 //     } catch (error) {
@@ -576,6 +581,7 @@
 //   console.log(`Server running on port ${PORT}`);
 //   console.log(`Frontend URL: ${process.env.FRONTEND_URL}`);
 // });
+
 // backend/server.js
 
 // Import necessary modules
@@ -938,7 +944,7 @@ app.post('/api/tests/:testId/join', authenticateToken, async (req, res) => {
     await test.save();
 
     // Emit update to all clients in this test's room (including admin and other users)
-    io.to(testId).emit('testUpdate', { participants: test.participants, status: test.status, startTime: test.startTime ? test.startTime.toISOString() : null });
+    io.to(testId).emit('testUpdate', { participants: test.participants, status: test.status, startTime: test.startTime ? test.startTime.toISOString() : null, duration: test.duration });
 
     res.status(200).json({ message: 'Joined test successfully', testData: test });
 

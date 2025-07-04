@@ -1,3 +1,4 @@
+
 // // frontend/src/components/AdminDashboard.jsx
 // import React, { useState, useEffect, useCallback } from 'react';
 // import { useAuth } from '../App'; // Use useAuth hook
@@ -7,7 +8,9 @@
 //   const { userId, userName, userRole, token, showAppModal } = useAuth(); // Get auth context
 //   const [topic, setTopic] = useState('');
 //   const [numQuestions, setNumQuestions] = useState(5);
-//   const [loading, setLoading] = useState(false);
+//   const [testDuration, setTestDuration] = useState(60); // New state for test duration in minutes
+//   const [loading, setLoading] = useState(false); // General loading for actions
+//   const [loadingSelectedTestDetails, setLoadingSelectedTestDetails] = useState(false); // Specific loading for details pane
 //   const [tests, setTests] = useState([]);
 //   const [selectedTest, setSelectedTest] = useState(null);
 //   const [testParticipants, setTestParticipants] = useState([]);
@@ -62,29 +65,34 @@
 //   }, [fetchAdminTests, userRole]);
 
 //   // Listen for real-time updates on a selected test (participants, status)
+//   // This useEffect now explicitly fetches the latest details for the selected test.
 //   useEffect(() => {
-//     if (!selectedTest || !backendUrl || userRole !== 'admin') return;
+//     if (!selectedTest?.testId || !backendUrl || userRole !== 'admin') return;
 
-//     // Re-fetch the selected test details to get the latest state
+//     const testIdToFetch = selectedTest.testId;
+
 //     const fetchSelectedTestDetails = async () => {
+//       setLoadingSelectedTestDetails(true); // Start loading for details pane
 //       try {
-//         const response = await fetch(`${backendUrl}/api/tests/${selectedTest.testId}`, {
+//         const response = await fetch(`${backendUrl}/api/tests/${testIdToFetch}`, {
 //           headers: { 'Authorization': `Bearer ${token}` }
 //         });
 //         if (!response.ok) {
 //           throw new Error(`HTTP error! status: ${response.status}`);
 //         }
 //         const data = await response.json();
-//         setSelectedTest(data);
-//         setTestParticipants(data.participants || []);
+//         setSelectedTest(data); // Update with the latest details (status, participants, etc.)
+//         setTestParticipants(data.participants || []); // Use the latest participants from fetched data
 //       } catch (error) {
 //         console.error("Error fetching selected test details:", error);
 //         showAppModal('Error', `Failed to get test details: ${error.message}`);
+//       } finally {
+//         setLoadingSelectedTestDetails(false); // End loading for details pane
 //       }
 //     };
 
 //     fetchSelectedTestDetails();
-//   }, [selectedTest, backendUrl, token, userRole, showAppModal]);
+//   }, [selectedTest?.testId, backendUrl, token, userRole, showAppModal]); // Depend on testId for stability
 
 
 //   // Fetch results for a selected test
@@ -115,8 +123,8 @@
 
 //   const handleCreateTest = async (e) => {
 //     e.preventDefault();
-//     if (!topic || numQuestions < 1 || !userId || !backendUrl || userRole !== 'admin') {
-//       showAppModal('Validation Error', 'Please provide a topic, a valid number of questions, and ensure you are logged in as an admin.');
+//     if (!topic || numQuestions < 1 || testDuration < 1 || !userId || !backendUrl || userRole !== 'admin') {
+//       showAppModal('Validation Error', 'Please provide a topic, a valid number of questions, a valid duration, and ensure you are logged in as an admin.');
 //       return;
 //     }
 
@@ -128,7 +136,8 @@
 //           'Content-Type': 'application/json',
 //           'Authorization': `Bearer ${token}`
 //         },
-//         body: JSON.stringify({ topic, numQuestions }) // adminId is derived from token on backend
+//         // Include new 'duration' field in the request body
+//         body: JSON.stringify({ topic, numQuestions, duration: testDuration }) // adminId is derived from token on backend
 //       });
 
 //       if (!response.ok) {
@@ -137,9 +146,10 @@
 //       }
 
 //       const data = await response.json();
-//       showAppModal('Success', `Test "${topic}" created! Share this link with users: ${data.testLink}`);
+//       showAppModal('Success', `Test "${topic}" created! Share this link with users: ${window.location.origin}/test/${data.testId}`);
 //       setTopic('');
 //       setNumQuestions(5);
+//       setTestDuration(60); // Reset duration after successful creation
 //       fetchAdminTests(); // Refresh the list of tests
 //     } catch (error) {
 //       console.error('Error creating test:', error);
@@ -176,8 +186,8 @@
 //       }
 
 //       showAppModal('Test Started!', `Test "${selectedTest.topic}" has started.`);
-//       fetchAdminTests(); // Refresh test status
-//       // Also re-fetch selected test details to update its status and participants
+//       fetchAdminTests(); // Refresh test status in the list
+//       // Re-fetch selected test details to update its status and participants immediately
 //       const updatedSelectedTestResponse = await fetch(`${backendUrl}/api/tests/${selectedTest.testId}`, {
 //         headers: { 'Authorization': `Bearer ${token}` }
 //       });
@@ -222,7 +232,7 @@
 //       }
 
 //       showAppModal('Test Ended!', `Test "${selectedTest.topic}" has ended.`);
-//       fetchAdminTests(); // Refresh test status
+//       fetchAdminTests(); // Refresh test status in the list
 //       const updatedSelectedTestResponse = await fetch(`${backendUrl}/api/tests/${selectedTest.testId}`, {
 //         headers: { 'Authorization': `Bearer ${token}` }
 //       });
@@ -322,6 +332,19 @@
 //                   required
 //                 />
 //               </div>
+//               {/* New field for Test Duration */}
+//               <div>
+//                 <label htmlFor="testDuration" className="block text-gray-700 text-lg font-semibold mb-2">Test Duration (minutes):</label>
+//                 <input
+//                   type="number"
+//                   id="testDuration"
+//                   className="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
+//                   value={testDuration}
+//                   onChange={(e) => setTestDuration(Math.max(1, parseInt(e.target.value) || 1))}
+//                   min="1"
+//                   required
+//                 />
+//               </div>
 //               <button
 //                 type="submit"
 //                 className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition duration-300 transform hover:scale-105 flex items-center justify-center text-xl"
@@ -347,7 +370,7 @@
 //                     </div>
 //                     <div className="flex flex-wrap justify-center sm:justify-end gap-3">
 //                       <button
-//                         onClick={() => { setSelectedTest(test); setTestParticipants(test.participants); setTestResults([]); }}
+//                         onClick={() => { setSelectedTest(test); setTestParticipants([]); setTestResults([]); }} // Clear participants/results immediately
 //                         className="bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-md text-sm font-medium transition duration-200"
 //                       >
 //                         Details
@@ -366,40 +389,50 @@
 
 //             {selectedTest && (
 //               <div className="mt-8 p-6 bg-white rounded-lg shadow-lg border border-blue-200">
-//                 <h3 className="text-2xl font-bold text-gray-800 mb-4 text-center">Selected Test: {selectedTest.topic}</h3>
-//                 <p className="text-gray-700 mb-2"><strong>Test ID:</strong> <span className="font-mono text-sm bg-gray-100 p-1 rounded">{selectedTest.testId}</span></p>
-//                 <p className="text-gray-700 mb-4"><strong>Status:</strong> {renderTestStatus(selectedTest.status)}</p>
-
-//                 <div className="flex justify-center gap-4 mb-6">
-//                   {selectedTest.status === 'created' && (
-//                     <button
-//                       onClick={handleStartTest}
-//                       disabled={loading}
-//                       className="bg-green-600 hover:bg-green-700 text-white py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 text-lg"
-//                     >
-//                       {loading ? <LoadingSpinner size="sm" /> : 'Start Test'}
-//                     </button>
-//                   )}
-//                   {selectedTest.status === 'active' && (
-//                     <button
-//                       onClick={handleEndTest}
-//                       disabled={loading}
-//                       className="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 text-lg"
-//                     >
-//                       {loading ? <LoadingSpinner size="sm" /> : 'End Test'}
-//                     </button>
-//                   )}
-//                 </div>
-
-//                 <h4 className="text-xl font-bold text-gray-800 mb-3">Participants ({testParticipants.length}):</h4>
-//                 {testParticipants.length === 0 ? (
-//                   <p className="text-gray-600">No participants have joined yet.</p>
+//                 {loadingSelectedTestDetails ? (
+//                   <div className="flex justify-center items-center h-32">
+//                     <LoadingSpinner /> <p className="ml-2 text-gray-700">Loading test details...</p>
+//                   </div>
 //                 ) : (
-//                   <ul className="list-disc list-inside bg-gray-100 p-4 rounded-md max-h-48 overflow-y-auto">
-//                     {testParticipants.map((p, index) => (
-//                       <li key={index} className="text-gray-700 py-0.5">{p.userName} (<span className="font-mono text-xs">{p.userId.substring(0, 8)}...</span>)</li>
-//                     ))}
-//                   </ul>
+//                   <>
+//                     <h3 className="text-2xl font-bold text-gray-800 mb-4 text-center">Selected Test: {selectedTest.topic}</h3>
+//                     <p className="text-gray-700 mb-2"><strong>Test ID:</strong> <span className="font-mono text-sm bg-gray-100 p-1 rounded">{selectedTest.testId}</span></p>
+//                     <p className="text-gray-700 mb-2"><strong>Status:</strong> {renderTestStatus(selectedTest.status)}</p>
+//                     {/* Display Test Duration */}
+//                     <p className="text-gray-700 mb-4"><strong>Duration:</strong> {selectedTest.duration} minutes</p>
+
+//                     <div className="flex justify-center gap-4 mb-6">
+//                       {selectedTest.status === 'created' && (
+//                         <button
+//                           onClick={handleStartTest}
+//                           disabled={loading}
+//                           className="bg-green-600 hover:bg-green-700 text-white py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 text-lg"
+//                         >
+//                           {loading ? <LoadingSpinner size="sm" /> : 'Start Test'}
+//                         </button>
+//                       )}
+//                       {selectedTest.status === 'active' && (
+//                         <button
+//                           onClick={handleEndTest}
+//                           disabled={loading}
+//                           className="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 text-lg"
+//                         >
+//                           {loading ? <LoadingSpinner size="sm" /> : 'End Test'}
+//                         </button>
+//                       )}
+//                     </div>
+
+//                     <h4 className="text-xl font-bold text-gray-800 mb-3">Participants ({testParticipants.length}):</h4>
+//                     {testParticipants.length === 0 ? (
+//                       <p className="text-gray-600">No participants have joined yet.</p>
+//                     ) : (
+//                       <ul className="list-disc list-inside bg-gray-100 p-4 rounded-md max-h-48 overflow-y-auto">
+//                         {testParticipants.map((p, index) => (
+//                           <li key={index} className="text-gray-700 py-0.5">{p.userName} (<span className="font-mono text-xs">{p.userId.substring(0, 8)}...</span>)</li>
+//                         ))}
+//                       </ul>
+//                     )}
+//                   </>
 //                 )}
 //               </div>
 //             )}
@@ -472,7 +505,7 @@
 //             {selectedTest && testResults.length === 0 && selectedTest.status === 'completed' && (
 //               <p className="mt-8 text-center text-gray-600 text-lg">No results submitted for this completed test yet.</p>
 //             )}
-//              {selectedTest && selectedTest.status !== 'completed' && (
+//             {selectedTest && selectedTest.status !== 'completed' && (
 //               <p className="mt-8 text-center text-gray-600 text-lg">Results are available only for completed tests.</p>
 //             )}
 //           </div>
@@ -483,6 +516,7 @@
 // }
 
 // export default AdminDashboard;
+
 // frontend/src/components/AdminDashboard.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../App'; // Use useAuth hook

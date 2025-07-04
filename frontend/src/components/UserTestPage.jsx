@@ -1,3 +1,4 @@
+
 // // frontend/src/components/UserTestPage.jsx
 // import React, { useState, useEffect, useCallback } from 'react';
 // import { useParams } from 'react-router-dom';
@@ -149,7 +150,7 @@
 //         newSocket.on('testUpdate', (data) => {
 //           console.log('Received testUpdate:', data);
 //           setTestData(prev => {
-//             const updatedData = { ...prev, participants: data.participants, status: data.status, startTime: data.startTime };
+//             const updatedData = { ...prev, participants: data.participants, status: data.status, startTime: data.startTime, duration: data.duration }; // Include duration
 //             setTestStarted(updatedData.status === 'active');
 //             return updatedData;
 //           });
@@ -158,7 +159,7 @@
 //         newSocket.on('testStarted', (data) => {
 //           console.log('Test started event received:', data);
 //           setTestStarted(true);
-//           setTestData(prev => ({ ...prev, status: 'active', startTime: data.startTime }));
+//           setTestData(prev => ({ ...prev, status: 'active', startTime: data.startTime, duration: data.duration })); // Include duration
 //           showAppModal('Test Started!', 'The test has begun! Good luck!');
 //         });
 
@@ -190,17 +191,19 @@
 //     };
 
 //     fetchTestDataAndJoin();
-//   }, [testId, userId, userName, backendUrl, token, showAppModal, isSubmitted, handleSubmitTest]); // Added isSubmitted and handleSubmitTest to dependencies
+//   }, [testId, userId, userName, backendUrl, token, showAppModal, isSubmitted, handleSubmitTest]);
 
 //   // Countdown logic
 //   useEffect(() => {
+//     // Use testData.duration if available, otherwise default to 10 minutes (600 seconds)
+//     const testDurationSeconds = testData?.duration ? testData.duration * 60 : 600;
+
 //     if (!testData || testData.status !== 'active' || !testData.startTime) {
 //       setCountdown(null);
 //       return;
 //     }
 
 //     const startTimestamp = new Date(testData.startTime).getTime();
-//     const testDurationSeconds = 600; // Example: 10 minutes (600 seconds)
 
 //     const interval = setInterval(() => {
 //       const now = Date.now();
@@ -385,7 +388,7 @@ function UserTestPage() {
   const { userId, userName, token, showAppModal } = useAuth(); // Get auth context
   const { testId } = useParams(); // Get testId from URL params
   const [testData, setTestData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // For initial page load
   const [error, setError] = useState(null);
   const [socket, setSocket] = useState(null);
   const [countdown, setCountdown] = useState(null);
@@ -394,15 +397,16 @@ function UserTestPage() {
   const [userAnswers, setUserAnswers] = useState({}); // { questionIndex: selectedOption }
   const [showResults, setShowResults] = useState(false);
   const [finalScore, setFinalScore] = useState(null);
-  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false); // Tracks if test has been submitted
+  const [isSubmitting, setIsSubmitting] = useState(false); // New: Tracks submission in progress
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
   // Memoize handleSubmitTest
   const handleSubmitTest = useCallback(async () => {
-    if (isSubmitted) return;
+    if (isSubmitted || isSubmitting) return; // Prevent multiple submissions or re-submission while already submitting
 
-    setLoading(true);
+    setIsSubmitting(true); // Start submitting loading state
     try {
       const answersArray = Object.keys(userAnswers).map(index => ({
         questionIndex: parseInt(index),
@@ -426,16 +430,16 @@ function UserTestPage() {
       const data = await response.json();
       setFinalScore(data.score);
       setShowResults(true);
-      setIsSubmitted(true);
+      setIsSubmitted(true); // Mark as submitted
       showAppModal('Test Submitted!', `Your score: ${data.score} out of ${data.totalQuestions}`);
 
     } catch (err) {
       console.error('Error submitting test:', err);
       showAppModal('Submission Error', `Failed to submit test: ${err.message}`);
     } finally {
-      setLoading(false);
+      setIsSubmitting(false); // End submitting loading state
     }
-  }, [backendUrl, testId, userId, userName, userAnswers, isSubmitted, token, showAppModal]);
+  }, [backendUrl, testId, userId, userName, userAnswers, isSubmitted, isSubmitting, token, showAppModal]);
 
 
   // Initial fetch of test data and join test
@@ -456,7 +460,7 @@ function UserTestPage() {
 
     const fetchTestDataAndJoin = async () => {
       try {
-        setLoading(true);
+        setLoading(true); // Start general loading for initial fetch
         setError(null);
 
         // 1. Fetch test data
@@ -509,7 +513,7 @@ function UserTestPage() {
         const joinData = await joinResponse.json();
         setTestData(joinData.testData);
 
-        setLoading(false);
+        setLoading(false); // End general loading
 
         // 3. Initialize Socket.IO connection
         console.log(`Connecting to Socket.IO at ${backendUrl}`);
@@ -537,12 +541,12 @@ function UserTestPage() {
           showAppModal('Test Started!', 'The test has begun! Good luck!');
         });
 
-        newSocket.on('testEnded', () => { // New event listener for test ending
+        newSocket.on('testEnded', () => {
           console.log('Test ended event received.');
           setTestStarted(false); // Stop the test
           setCountdown(0); // Ensure countdown shows 0
           showAppModal('Test Ended', 'The administrator has ended the test.');
-          // Optionally, auto-submit if not already submitted
+          // Auto-submit if not already submitted
           if (!isSubmitted) {
             handleSubmitTest();
           }
@@ -560,7 +564,7 @@ function UserTestPage() {
       } catch (err) {
         console.error('Error in fetchTestDataAndJoin:', err);
         setError(`Failed to load test: ${err.message}`);
-        setLoading(false);
+        setLoading(false); // End general loading even on error
       }
     };
 
@@ -570,6 +574,7 @@ function UserTestPage() {
   // Countdown logic
   useEffect(() => {
     // Use testData.duration if available, otherwise default to 10 minutes (600 seconds)
+    // testData.duration is in minutes, convert to seconds
     const testDurationSeconds = testData?.duration ? testData.duration * 60 : 600;
 
     if (!testData || testData.status !== 'active' || !testData.startTime) {
@@ -589,18 +594,19 @@ function UserTestPage() {
         setCountdown(0);
         if (!isSubmitted) {
           showAppModal('Time Expired!', 'The test time has run out. Your answers will be submitted automatically.');
-          handleSubmitTest();
+          handleSubmitTest(); // Call the memoized submit function
         }
       } else {
         setCountdown(remainingSeconds);
       }
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(interval); // Cleanup interval on unmount or dependency change
   }, [testData, isSubmitted, handleSubmitTest, showAppModal]);
 
 
   const handleOptionSelect = (questionIndex, selectedOption) => {
+    // This function should not trigger a loading state
     setUserAnswers(prev => ({
       ...prev,
       [questionIndex]: selectedOption
@@ -704,7 +710,7 @@ function UserTestPage() {
             <div className="flex justify-between mt-6">
               <button
                 onClick={handlePreviousQuestion}
-                disabled={currentQuestionIndex === 0 || loading}
+                disabled={currentQuestionIndex === 0 || isSubmitting} // Disable if submitting
                 className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
               >
                 Previous
@@ -712,7 +718,7 @@ function UserTestPage() {
               {currentQuestionIndex < testData.questions.length - 1 ? (
                 <button
                   onClick={handleNextQuestion}
-                  disabled={loading}
+                  disabled={isSubmitting} // Disable if submitting
                   className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
                 >
                   Next
@@ -720,10 +726,10 @@ function UserTestPage() {
               ) : (
                 <button
                   onClick={handleSubmitTest}
-                  disabled={loading || isSubmitted}
+                  disabled={isSubmitting || isSubmitted} // Disable if submitting or already submitted
                   className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
                 >
-                  {loading ? <LoadingSpinner size="sm" /> : 'Submit Test'}
+                  {isSubmitting ? <LoadingSpinner size="sm" /> : 'Submit Test'}
                 </button>
               )}
             </div>

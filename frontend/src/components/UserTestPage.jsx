@@ -376,7 +376,6 @@
 // }
 
 // export default UserTestPage;
-// frontend/src/components/UserTestPage.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import io from 'socket.io-client';
@@ -397,14 +396,18 @@ function UserTestPage() {
   const [userAnswers, setUserAnswers] = useState({}); // { questionIndex: selectedOption }
   const [showResults, setShowResults] = useState(false);
   const [finalScore, setFinalScore] = useState(null);
-  const [isSubmitted, setIsSubmitted] = useState(false); // Tracks if test has been submitted
-  const [isSubmitting, setIsSubmitting] = useState(false); // New: Tracks submission in progress
+  const [isSubmitted, setIsSubmitted] = useState(false); // Tracks if test has been successfully submitted
+  const [isSubmitting, setIsSubmitting] = useState(false); // Tracks if submission is in progress
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
   // Memoize handleSubmitTest
   const handleSubmitTest = useCallback(async () => {
-    if (isSubmitted || isSubmitting) return; // Prevent multiple submissions or re-submission while already submitting
+    // --- CRITICAL GUARD: Prevent multiple submissions or re-submission while already submitting ---
+    if (isSubmitted || isSubmitting) {
+      console.log('Submission already in progress or already submitted. Aborting.');
+      return;
+    }
 
     setIsSubmitting(true); // Start submitting loading state
     try {
@@ -412,6 +415,8 @@ function UserTestPage() {
         questionIndex: parseInt(index),
         selectedOption: userAnswers[index]
       }));
+
+      console.log('Submitting test with answers:', answersArray);
 
       const response = await fetch(`${backendUrl}/api/tests/${testId}/submit`, {
         method: 'POST',
@@ -430,8 +435,9 @@ function UserTestPage() {
       const data = await response.json();
       setFinalScore(data.score);
       setShowResults(true);
-      setIsSubmitted(true); // Mark as submitted
+      setIsSubmitted(true); // Mark as successfully submitted
       showAppModal('Test Submitted!', `Your score: ${data.score} out of ${data.totalQuestions}`);
+      console.log('Test submitted successfully. Score:', data.score);
 
     } catch (err) {
       console.error('Error submitting test:', err);
@@ -439,12 +445,11 @@ function UserTestPage() {
     } finally {
       setIsSubmitting(false); // End submitting loading state
     }
-  }, [backendUrl, testId, userId, userName, userAnswers, isSubmitted, isSubmitting, token, showAppModal]);
+  }, [backendUrl, testId, userAnswers, isSubmitted, isSubmitting, token, showAppModal]);
 
 
   // Initial fetch of test data and join test
   useEffect(() => {
-    // These checks are now handled by ProtectedRoute, but good to have as a final safeguard
     if (!testId || !userId || !userName || !token) {
       console.warn("UserTestPage: Missing testId, userId, userName, or token. This should be handled by ProtectedRoute.");
       setError("Authentication or test information is missing. Please ensure you are logged in.");
@@ -483,7 +488,16 @@ function UserTestPage() {
         }
         const initialTestData = await testResponse.json();
         setTestData(initialTestData);
+        // Set testStarted based on the initial fetch status
         setTestStarted(initialTestData.status === 'active');
+        // If the test was already submitted, set the state accordingly
+        if (initialTestData.status === 'completed' && initialTestData.userScores && initialTestData.userScores[userId]) {
+            setFinalScore(initialTestData.userScores[userId].score);
+            setShowResults(true);
+            setIsSubmitted(true);
+            console.log("Test already completed and score fetched:", initialTestData.userScores[userId].score);
+        }
+
 
         // 2. Join the test via API (updates participants list in MongoDB)
         console.log(`Attempting to join test ${testId} as ${userName} (${userId})`);
@@ -504,6 +518,23 @@ function UserTestPage() {
           }
           try {
             const errorData = JSON.parse(errorText);
+            // If the user already submitted and tries to join again,
+            // the backend might return an error indicating it's completed for them.
+            // In that case, we should still show results if we have them.
+            if (errorData.message.includes("Test already completed for this user")) {
+                console.warn("Attempted to join an already completed test. Showing existing results.");
+                // We've already fetched testData, so userScores might be there.
+                if (initialTestData.userScores && initialTestData.userScores[userId]) {
+                    setFinalScore(initialTestData.userScores[userId].score);
+                    setShowResults(true);
+                    setIsSubmitted(true);
+                } else {
+                    // Fallback if score not immediately available on initial fetch (unlikely if backend is good)
+                    showAppModal('Info', 'You have already completed this test.');
+                }
+                setLoading(false);
+                return; // Stop further processing if already completed
+            }
             throw new Error(errorData.message || `Failed to join test: HTTP status ${joinResponse.status}`);
           } catch (jsonParseError) {
             throw new Error(`Failed to join test: Response was not valid JSON. Raw: ${errorText.substring(0, 100)}...`);
@@ -511,55 +542,68 @@ function UserTestPage() {
         }
 
         const joinData = await joinResponse.json();
+        // Update testData with any new information from joining (e.g., updated participants)
         setTestData(joinData.testData);
+        // Ensure testStarted reflects the most current status from the join response
+        setTestStarted(joinData.testData.status === 'active');
+        // If the join response indicates the test is completed for the user, update states
+        if (joinData.testData.status === 'completed' && joinData.testData.userScores && joinData.testData.userScores[userId]) {
+            setFinalScore(joinData.testData.userScores[userId].score);
+            setShowResults(true);
+            setIsSubmitted(true);
+            console.log("Test already completed during join. Score:", joinData.testData.userScores[userId].score);
+        }
+
 
         setLoading(false); // End general loading
 
-        // 3. Initialize Socket.IO connection
-        console.log(`Connecting to Socket.IO at ${backendUrl}`);
-        const newSocket = io(backendUrl);
-        setSocket(newSocket);
+        // 3. Initialize Socket.IO connection only if the test is not yet submitted
+        if (!isSubmitted) {
+            console.log(`Connecting to Socket.IO at ${backendUrl}`);
+            const newSocket = io(backendUrl);
+            setSocket(newSocket);
 
-        newSocket.on('connect', () => {
-          console.log('Socket.IO connected:', newSocket.id);
-          newSocket.emit('joinTestRoom', testId);
-        });
+            newSocket.on('connect', () => {
+                console.log('Socket.IO connected:', newSocket.id);
+                newSocket.emit('joinTestRoom', testId);
+            });
 
-        newSocket.on('testUpdate', (data) => {
-          console.log('Received testUpdate:', data);
-          setTestData(prev => {
-            const updatedData = { ...prev, participants: data.participants, status: data.status, startTime: data.startTime, duration: data.duration }; // Include duration
-            setTestStarted(updatedData.status === 'active');
-            return updatedData;
-          });
-        });
+            newSocket.on('testUpdate', (data) => {
+                console.log('Received testUpdate:', data);
+                setTestData(prev => {
+                    const updatedData = { ...prev, participants: data.participants, status: data.status, startTime: data.startTime, duration: data.duration }; // Include duration
+                    setTestStarted(updatedData.status === 'active');
+                    return updatedData;
+                });
+            });
 
-        newSocket.on('testStarted', (data) => {
-          console.log('Test started event received:', data);
-          setTestStarted(true);
-          setTestData(prev => ({ ...prev, status: 'active', startTime: data.startTime, duration: data.duration })); // Include duration
-          showAppModal('Test Started!', 'The test has begun! Good luck!');
-        });
+            newSocket.on('testStarted', (data) => {
+                console.log('Test started event received:', data);
+                setTestStarted(true);
+                setTestData(prev => ({ ...prev, status: 'active', startTime: data.startTime, duration: data.duration })); // Include duration
+                showAppModal('Test Started!', 'The test has begun! Good luck!');
+            });
 
-        newSocket.on('testEnded', () => {
-          console.log('Test ended event received.');
-          setTestStarted(false); // Stop the test
-          setCountdown(0); // Ensure countdown shows 0
-          showAppModal('Test Ended', 'The administrator has ended the test.');
-          // Auto-submit if not already submitted
-          if (!isSubmitted) {
-            handleSubmitTest();
-          }
-        });
+            newSocket.on('testEnded', () => {
+                console.log('Test ended event received.');
+                setTestStarted(false); // Stop the test
+                setCountdown(0); // Ensure countdown shows 0
+                showAppModal('Test Ended', 'The administrator has ended the test.');
+                // Auto-submit if not already submitted or currently submitting
+                handleSubmitTest(); // The guard inside handleSubmitTest will prevent double submission
+            });
 
-        newSocket.on('disconnect', () => {
-          console.log('Socket.IO disconnected.');
-        });
+            newSocket.on('disconnect', () => {
+                console.log('Socket.IO disconnected.');
+            });
 
-        return () => {
-          console.log('Disconnecting Socket.IO on component unmount.');
-          newSocket.disconnect();
-        };
+            return () => {
+                console.log('Disconnecting Socket.IO on component unmount.');
+                newSocket.disconnect();
+            };
+        } else {
+            console.log("Test already submitted, skipping Socket.IO connection.");
+        }
 
       } catch (err) {
         console.error('Error in fetchTestDataAndJoin:', err);
@@ -569,7 +613,11 @@ function UserTestPage() {
     };
 
     fetchTestDataAndJoin();
+    // Dependencies: only re-run if these fundamental identifiers change
+    // handleSubmitTest is now a dependency due to useCallback's requirements,
+    // but its internal guard makes its frequent re-creation less impactful.
   }, [testId, userId, userName, backendUrl, token, showAppModal, isSubmitted, handleSubmitTest]);
+
 
   // Countdown logic
   useEffect(() => {
@@ -577,7 +625,7 @@ function UserTestPage() {
     // testData.duration is in minutes, convert to seconds
     const testDurationSeconds = testData?.duration ? testData.duration * 60 : 600;
 
-    if (!testData || testData.status !== 'active' || !testData.startTime) {
+    if (!testData || testData.status !== 'active' || !testData.startTime || isSubmitted) {
       setCountdown(null);
       return;
     }
@@ -592,21 +640,19 @@ function UserTestPage() {
       if (remainingSeconds <= 0) {
         clearInterval(interval);
         setCountdown(0);
-        if (!isSubmitted) {
-          showAppModal('Time Expired!', 'The test time has run out. Your answers will be submitted automatically.');
-          handleSubmitTest(); // Call the memoized submit function
-        }
+        // Auto-submit if time runs out and not already submitted
+        handleSubmitTest(); // The guard inside handleSubmitTest will prevent double submission
       } else {
         setCountdown(remainingSeconds);
       }
     }, 1000);
 
     return () => clearInterval(interval); // Cleanup interval on unmount or dependency change
-  }, [testData, isSubmitted, handleSubmitTest, showAppModal]);
+  }, [testData, isSubmitted, handleSubmitTest, showAppModal, userId]);
 
 
   const handleOptionSelect = (questionIndex, selectedOption) => {
-    // This function should not trigger a loading state
+    // This function should not trigger a loading state or full page reload
     setUserAnswers(prev => ({
       ...prev,
       [questionIndex]: selectedOption
@@ -617,6 +663,7 @@ function UserTestPage() {
     if (testData && currentQuestionIndex < testData.questions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
     } else if (testData) {
+      // If on the last question and clicking next, prompt to submit
       showAppModal('Ready to Submit?', 'You have answered all questions. Click "Submit Test" to finish.');
     }
   };
@@ -674,7 +721,7 @@ function UserTestPage() {
         <h1 className="text-4xl font-extrabold text-center text-gray-800 mb-4">{testData.topic} Test</h1>
         <p className="text-center text-gray-600 mb-6">Welcome, <span className="font-semibold text-blue-600">{userName}</span>! Your User ID: <span className="font-mono bg-gray-200 px-2 py-1 rounded text-sm">{userId.substring(0, 8)}...</span></p>
 
-        {!testStarted && testData.status === 'created' && (
+        {!testStarted && testData.status === 'created' && !showResults && (
           <div className="text-center p-6 bg-yellow-50 rounded-lg shadow-inner border border-yellow-200">
             <h2 className="text-3xl font-bold text-yellow-800 mb-4">Waiting for Admin to Start Test...</h2>
             <p className="text-xl text-gray-700 mb-4">
@@ -693,6 +740,7 @@ function UserTestPage() {
           </div>
         )}
 
+        {/* Display test content only if test has started and not showing results */}
         {testStarted && testData.status === 'active' && !showResults && (
           <div className="space-y-6">
             <div className="flex justify-between items-center bg-blue-50 p-4 rounded-lg shadow-md border border-blue-200">
@@ -710,7 +758,7 @@ function UserTestPage() {
             <div className="flex justify-between mt-6">
               <button
                 onClick={handlePreviousQuestion}
-                disabled={currentQuestionIndex === 0 || isSubmitting} // Disable if submitting
+                disabled={currentQuestionIndex === 0 || isSubmitting || isSubmitted} // Disable if submitting or submitted
                 className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
               >
                 Previous
@@ -718,7 +766,7 @@ function UserTestPage() {
               {currentQuestionIndex < testData.questions.length - 1 ? (
                 <button
                   onClick={handleNextQuestion}
-                  disabled={isSubmitting} // Disable if submitting
+                  disabled={isSubmitting || isSubmitted} // Disable if submitting or submitted
                   className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
                 >
                   Next
@@ -736,6 +784,7 @@ function UserTestPage() {
           </div>
         )}
 
+        {/* Display results if showResults is true (either submitted by user or auto-submitted) */}
         {showResults && (
           <div className="text-center p-6 bg-green-50 rounded-lg shadow-inner border border-green-200">
             <h2 className="text-3xl font-bold text-green-800 mb-4">Test Completed!</h2>
